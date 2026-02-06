@@ -1,5 +1,8 @@
-name: Build ONNX Extensions 16KB
-on: workflow_dispatch  # 这个开关会让按钮出现
+name: build wheel linux aarch64
+on: 
+  workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
   build:
@@ -8,7 +11,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: recursive  # 必须包含子模块，否则编译会失败
+
+      - name: Locate Build Script
+        run: |
+          # 自动寻找 build_android.py 的实际位置
+          SCRIPT_PATH=$(find . -name "build_android.py" | head -n 1)
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "Error: build_android.py not found!"
+            exit 1
+          fi
+          echo "SCRIPT_LOCATION=$SCRIPT_PATH" >> $GITHUB_ENV
+          echo "Found script at: $SCRIPT_PATH"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -17,18 +31,19 @@ jobs:
 
       - name: Build Android Libraries
         run: |
-          # 使用官方脚本编译，指定 NDK 27 和 16KB 标志
           export ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME
-          python3 build_android.py \
+          # 使用自动找到的路径运行脚本
+          python3 ${{ env.SCRIPT_LOCATION }} \
             --config Release \
             --arch arm64-v8a \
             --sdk_path $ANDROID_HOME \
             --additional_params "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
 
-      - name: Upload SO Files
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: onnx-extensions-16kb-so
+          # 这里的路径根据编译产物的实际位置调整，通常在 out 或 build 目录下
           path: |
-            build/android/Release/lib/*.so
-            java/android/build/outputs/aar/*.aar
+            **/build/**/Release/**/*.so
+            **/build/**/*.aar
