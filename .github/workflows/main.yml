@@ -1,4 +1,4 @@
-name: Build ONNX Extensions 16KB (Final Fix)
+name: Build ONNX Extensions 16KB (Final Success)
 on: 
   workflow_dispatch:
 
@@ -9,15 +9,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # 使用修复了 16KB 对齐的作者分支
           repository: ssk18/onnxruntime-extensions
           ref: enable-16KB-for-android 
+          # 必须包含子模块，否则 CMake 会因为找不到核心库报错
           submodules: recursive
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -25,31 +20,38 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Build with Official 16KB Script
+      - name: Build Android AAR and SO
         run: |
-          export ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME
-          # --build_java 是生成 libonnxruntime_extensions4j_jni.so 的关键
-          python3 build_android.py \
-            --config Release \
-            --arch arm64-v8a \
-            --sdk_path $ANDROID_HOME \
-            --android_ndk_path $ANDROID_NDK_LATEST_HOME \
-            --build_java
+          # 1. 准备环境变量
+          export NDK_ROOT=$ANDROID_NDK_LATEST_HOME
+          export ANDROID_SDK_ROOT=$ANDROID_HOME
+          
+          # 2. 关键：设置 _BUILD_CFG 强制编译 arm64-v8a
+          # 格式为: "abi_name target_dir"
+          export _BUILD_CFG="arm64-v8a $(pwd)/out/android/Release"
+          
+          chmod +x build.android
+          # 赋予 gradlew 执行权限，脚本最后会调用它
+          chmod +x java/gradlew
 
-      - name: Collect and Verify Files
+          # 3. 运行脚本并传入 16KB 对齐参数
+          # 注意：$@ 会被透传给 cmake 命令
+          ./build.android \
+            -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-z,max-page-size=16384"
+
+      - name: Collect Results
         run: |
-          # 创建一个目录专门存放我们要的 .so
-          mkdir -p final_libs
-          # 搜寻所有生成的 .so 文件并拷贝出来
-          find build/android/Release -name "*.so" -exec cp {} final_libs/ \;
-          echo "Files collected in final_libs:"
-          ls -l final_libs
+          mkdir -p final_artifacts
+          # 搜寻所有的 .so (包括核心库和 JNI 库)
+          find out/android/Release -name "*.so" -exec cp {} final_artifacts/ \;
+          # 搜寻生成的 AAR 文件
+          find out/android/Release/aar_out -name "*.aar" -exec cp {} final_artifacts/ \;
+          
+          echo "Build Complete. Files found:"
+          ls -R final_artifacts
 
-      - name: Upload Correct 16KB Artifacts
+      - name: Upload 16KB Aligned Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: onnx-extensions-16kb-all-libs
-          # 上传搜集到的 so 以及生成的 aar 压缩包
-          path: |
-            final_libs/*.so
-            java/android/build/outputs/aar/*.aar
+          name: onnx-extensions-16kb-arm64
+          path: final_artifacts/*
